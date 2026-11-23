@@ -1,3 +1,5 @@
+const AI_URL = process.env.AI_SERVICE_URL; // e.g. https://relay-ai.onrender.com
+const AI_KEY = process.env.AI_SERVICE_KEY;
 const express = require('express');
 const multer = require('multer');
 const { spawn } = require('child_process');
@@ -55,42 +57,32 @@ app.post('/api/call', upload.array('files', 5), async (req, res) => {
   }
   knowledge = knowledge.slice(0, MAX_KNOWLEDGE_CHARS);
 
-  // Run the Python AI file and stream its output back to the browser
-  const py = spawn(PYTHON, [AI_SCRIPT]);
-  let started = false;
-  let errText = '';
+    const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90000);
+  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
 
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  const timer = setTimeout(() => py.kill(), AI_TIMEOUT_MS);
-  res.on('close', () => { if (!res.writableEnded) py.kill(); });
-
-  py.stdin.on('error', () => {});
-  py.stdin.write(JSON.stringify({ phone, prompt, knowledge }));
-  py.stdin.end();
-
-  py.stdout.on('data', (chunk) => { started = true; res.write(chunk); });
-  py.stderr.on('data', (chunk) => { errText += chunk.toString(); });
-
-  py.on('error', (err) => {
-    clearTimeout(timer);
-    console.error('Could not start Python:', err.message);
-    if (!started) res.status(500).json({ error: 'AI service could not start.' });
-    else res.end();
-  });
-
-  py.on('close', (code) => {
-    clearTimeout(timer);
-    if (code !== 0) {
-      console.error('AI script failed:', errText);
-      if (!started) return res.status(502).json({ error: 'The AI request failed.' });
-      return res.end('\n\n[The AI stopped unexpectedly.]');
+  try {
+    const aiRes = await fetch(`${AI_URL}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AI_KEY },
+      body: JSON.stringify({ phone, prompt, knowledge }),
+      signal: controller.signal
+    });
+    if (!aiRes.ok || !aiRes.body) {
+      return res.status(502).json({ error: 'The AI request failed.' });
     }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    for await (const chunk of aiRes.body) res.write(chunk);
     res.end();
-  });
-});
+  } catch (err) {
+    console.error('AI service error:', err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'The AI request failed.' });
+    else res.end('\n\n[The AI stopped unexpectedly.]');
+  } finally {
+    clearTimeout(timer);
+  }
 
 // Upload or other request errors
 app.use((err, req, res, next) => {
