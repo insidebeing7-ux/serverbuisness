@@ -80,9 +80,10 @@ app.post('/api/call', upload.array('files', 5), async (req, res) => {
     console.error('AI service error:', err.message);
     if (!res.headersSent) res.status(502).json({ error: 'The AI request failed.' });
     else res.end('\n\n[The AI stopped unexpectedly.]');
-  } finally {
+   } finally {
     clearTimeout(timer);
   }
+});   // <-- closes app.post('/api/call', ...)
 
 // Upload or other request errors
 app.use((err, req, res, next) => {
